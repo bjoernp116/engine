@@ -1,80 +1,41 @@
 #include <SDL2/SDL_events.h>
+#include <SDL2/SDL_pixels.h>
+#include <SDL2/SDL_rect.h>
+#include <SDL2/SDL_render.h>
 #include <SDL2/SDL_surface.h>
+#include <SDL2/SDL_video.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <SDL2/SDL.h>
+#include <stdlib.h>
+#include "types.h"
 
-#define ASSERT(_e, ...) if (!(_e)) { fprintf(stderr, __VA_ARGS__); exit(1); }
 
-typedef float    f32;
-typedef double   f64;
-typedef uint8_t  u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
-typedef int8_t   i8;
-typedef int16_t  i16;
-typedef int32_t  i32;
-typedef int64_t  i64;
-typedef size_t   usize;
-typedef ssize_t  isize;
-
-#define SCREEN_WIDTH 384
-#define SCREEN_HEIGHT 216
-
-typedef struct v2_s { f32 x, y; } v2;
-typedef struct v2i_s { i32 x, y; } v2i;
-
-#define dot(v0, v1)                  \
-    ({ const v2 _v0 = (v0), _v1 = (v1); (_v0.x * _v1.x) + (_v0.y * _v1.y); })
-#define length(v) ({ const v2 _v = (v); sqrtf(dot(_v, _v)); })
-#define normalize(u) ({              \
-        const v2 _u = (u);           \
-        const f32 l = length(_u);    \
-        (v2) { _u.x / l, _u.y / l }; \
-    })
-#define min(a, b) ({ __typeof__(a) _a = (a), _b = (b); _a < _b ? _a : _b; })
-#define max(a, b) ({ __typeof__(a) _a = (a), _b = (b); _a > _b ? _a : _b; })
-#define sign(a) ({                                       \
-        __typeof__(a) _a = (a);                          \
-        (__typeof__(a))(_a < 0 ? -1 : (_a > 0 ? 1 : 0)); \
-    })
-
-#define MAP_SIZE 16
-static u8 MAPDATA[MAP_SIZE * MAP_SIZE] = {
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 3, 0, 1,
-    1, 0, 0, 0, 0, 3, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1,
-    1, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 1,
-    1, 0, 2, 0, 4, 4, 0, 4, 0, 0, 0, 0, 0, 0, 0, 1,
-    1, 0, 0, 0, 4, 0, 0, 3, 0, 0, 0, 2, 0, 0, 0, 1,
-    1, 0, 3, 0, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 1,
-    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 2, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1,
-    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 3, 0, 1,
-    1, 0, 0, 0, 0, 3, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1,
-    1, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 1,
-    1, 0, 2, 0, 4, 4, 0, 4, 0, 0, 0, 0, 0, 0, 0, 1,
-    1, 0, 0, 0, 4, 0, 0, 3, 0, 0, 0, 2, 0, 0, 0, 1,
-    1, 0, 3, 0, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1,
-};
-
-struct {
-    SDL_Window *window;
-    SDL_Texture *texture;
-    SDL_Renderer *renderer;
-    u32 pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
-    bool quit;
-
-    v2 pos, dir, plane;
-} state;
+State state;
 
 static void verline(int x, int y0, int y1, u32 color) {
     for (int y = y0; y <= y1; y++) {
+        if (y > SCREEN_HEIGHT || x > SCREEN_WIDTH || y < 0 || x < 0) { ASSERT(false, "OUT OF BOUNDS!\n"); exit(-1); }
         state.pixels[(y * SCREEN_WIDTH) + x] = color;
     }
+}
+
+static inline v2 intersect(v2 a0, v2 a1, v2 b0, v2 b1) {
+    const f32 d = ((a0.x - a1.x) * (b0.y - b1.y)) - ((a0.y - a1.y) * (b0.x - b1.x));
+
+    if (fabsf(d) < 0.000001f) { return (v2) { NAN, NAN }; }
+
+    const f32 t = (((a0.x - b0.x) * (b0.y - b1.y)) - ((a0.y - b0.y) * (b0.x - b1.x))) / d;
+    const f32 u = (((a0.x - b0.x) * (a0.y - a1.y)) - ((a0.y - b0.y) * (a0.x - a1.x))) / d;
+
+    return (t >= 0 && t <= 1 && u >= 0 && u <= 1) ?
+        ((v2) {
+            a0.x + (t * (a1.x - a0.x)),
+            a0.y + (t * (a1.y - a0.y))
+        }) : ((v2) {NAN, NAN} );
+
 }
 
 static void render() {
@@ -87,9 +48,10 @@ static void render() {
             state.dir.x + state.plane.x * xcam,
             state.dir.y + state.plane.y * xcam
         };
+        //printf("DIR: (%.f, %.f)", state.dir.x, state.dir.y);
 
         v2 pos = state.pos;
-        v2i ipos = { (int) pos.x, (int) pos.y };
+        v2 ipos = { pos.x, pos.y };
 
         // distance ray must travel from one x/y side to the next
         const v2 deltadist = {
@@ -104,12 +66,13 @@ static void render() {
         };
 
         // integer step direction for x/y, calculated from overall diff
-        const v2i step = { (int) sign(dir.x), (int) sign(dir.y) };
+        const v2 step = { (float) sign(dir.x), (float) sign(dir.y) };
 
         // DDA hit
         struct { int val, side; v2 pos; } hit = { 0, 0, { 0.0f, 0.0f } };
-
+        //printf("RAY_LENGTH: %f\n", length(ipos));
         while (!hit.val) {
+            if (length(ipos) > 100) { break; }
             if (sidedist.x < sidedist.y) {
                 sidedist.x += deltadist.x;
                 ipos.x += step.x;
@@ -120,22 +83,49 @@ static void render() {
                 hit.side = 1;
             }
 
-            ASSERT(
-                ipos.x >= 0
-                && ipos.x < MAP_SIZE
-                && ipos.y >= 0
-                && ipos.y < MAP_SIZE,
-                "DDA out of bounds");
 
-            hit.val = MAPDATA[ipos.y * MAP_SIZE + ipos.x];
+            for (usize i = 0; i < state.walls.n; i++) {
+                Wall wall = state.walls.arr[i];
+                v2 intersection = intersect(state.pos, ipos, wall.a, wall.b);
+                if (!isnan(intersection.x)) {
+                    hit.val = 1;
+                    hit.pos = intersection;
+                    break;
+                } else {
+                    hit.val = 0;
+                }
+
+            }
+            //hit.val = MAPDATA[ipos.y * MAP_SIZE + ipos.x];
         }
+
+        /*v2 ray_target = (v2) { state.pos.x + state.dir.x * 10, state.pos.y + state.dir.y * 10 };
+        f32 min_distance = 10000000;
+        Wall min_wall = state.walls.arr[0];
+        for (usize i = 0; i < state.walls.n; i++) {
+            Wall wall = state.walls.arr[i];
+            v2 intersection = intersect(state.pos, ray_target, wall.a, wall.b);
+            if(isnan(intersection.x) || isnan(intersection.y)) {
+                continue;
+            }
+            v2 dist_vec = (v2) { pos.x - intersection.x, pos.y - intersection.y };
+            f32 dist = length(dist_vec);
+            if(dist < min_distance) {
+                min_distance = dist;
+                min_wall = wall;
+            }
+        }*/
+
+        //hit.pos = (v2) { pos.x + sidedist.x, pos.y + sidedist.y };
+        state.minimap.arr[x] = hit.pos;
 
         u32 color;
         switch (hit.val) {
-        case 1: color = 0xFF0000FF; break;
-        case 2: color = 0xFF00FF00; break;
-        case 3: color = 0xFFFF0000; break;
-        case 4: color = 0xFFFF00FF; break;
+            //case 0: continue; break;
+            case 1: color = 0xFF0000FF; break;
+            case 2: color = 0xFF00FF00; break;
+            case 3: color = 0xFFFF0000; break;
+            case 4: color = 0xFFFF00FF; break;
         }
 
         // darken colors on y-sides
@@ -147,7 +137,6 @@ static void render() {
             color = 0xFF000000 | (br & 0xFF00FF) | (g & 0x00FF00);
         }
 
-        hit.pos = (v2) { pos.x + sidedist.x, pos.y + sidedist.y };
 
         // distance to hit
         const f32 dperp =
@@ -161,7 +150,6 @@ static void render() {
             h = (int) (SCREEN_HEIGHT / dperp),
             y0 = max((SCREEN_HEIGHT / 2) - (h / 2), 0),
             y1 = min((SCREEN_HEIGHT / 2) + (h / 2), SCREEN_HEIGHT - 1);
-
         verline(x, 0, y0, 0xFF202020);
         verline(x, y0, y1, color);
         verline(x, y1, SCREEN_HEIGHT - 1, 0xFF505050);
@@ -174,6 +162,120 @@ static void rotate(f32 rot) {
     state.dir.y = d.x * sin(rot) + d.y * cos(rot);
     state.plane.x = p.x * cos(rot) - p.y * sin(rot);
     state.plane.y = p.x * sin(rot) + p.y * cos(rot);
+}
+
+
+void load_map(char* path) {
+
+    FILE* input = fopen(path, "r");
+    ASSERT(input, "Cannot find Map!");
+
+    enum { SCAN_SECTOR, SCAN_WALL, SCAN_NONE } scan = SCAN_NONE;
+    char line[1024], buf[64];
+    while (fgets(line, sizeof(line), input)) {
+        const char* p = line;
+        while(isspace(*p)) {
+            p++;
+        }
+
+        if (!*p || *p == '#') {
+            continue;
+        } else if (*p == '[') {
+            strncpy(buf, p + 1, sizeof(buf));
+            const char* section = strtok(buf, "]");
+            if(!section) { fclose(input); ASSERT(false, "Incomplete Header"); };
+            if (!strcmp(section, "SECTOR")) { scan = SCAN_SECTOR; }
+            else if (!strcmp(section, "WALL")) { scan = SCAN_WALL; }
+            else { fclose(input); ASSERT(false, "Unknown Header"); }
+        } else {
+            switch(scan) {
+                case SCAN_WALL: {
+                    Wall* wall = &state.walls.arr[state.walls.n++];
+                    if (sscanf(p,
+                                "%f %f %f %f %d",
+                                &wall->a.x,
+                                &wall->a.y,
+                                &wall->b.x,
+                                &wall->b.y,
+                                &wall->portal) != 5) {
+                        fclose(input);
+                        ASSERT(false, "Incomplete Wall Definition");
+                    }
+                                }break;
+                case SCAN_SECTOR: {
+                    Sector* sector = &state.sectors.arr[state.sectors.n++];
+                    if (sscanf(p,
+                                "%lu %lu %lu %f %f",
+                                &sector->id,
+                                &sector->index,
+                                &sector->nwalls,
+                                &sector->floor,
+                                &sector->ceiling) != 5) {
+                        fclose(input);
+                        ASSERT(false, "Incomplete Sector Definition");
+                    }
+                                  } break;
+                default: fclose(input); ASSERT(false, "No Header Set");
+            }
+        }
+    }
+    /*printf("SECTORS:\n");
+    for(int i = 0; i < state.sectors.n; i++){
+        Sector s = state.sectors.arr[i];
+        printf("\tID: %lu, INDEX: %lu, WALLS: %lu, CEIL: %.1f, FLOOR: %.1f\n", s.id, s.index, s.nwalls, s.ceiling, s.floor);
+    }
+    printf("WALLS:\n");
+    for(int i = 0; i < state.walls.n; i++){
+        Wall w = state.walls.arr[i];
+        printf("\tA: (%.1f, %.1f), B: (%.1f, %.1f), PORTAL: %d\n", w.a.x, w.a.y, w.b.x, w.b.y, w.portal);
+    }*/
+    return;
+}
+
+const int MM_SCALE = 10;
+void minimap(){
+    f32 angle = atan(state.dir.y/state.dir.x);
+    int x = state.pos.x * MM_SCALE;
+    int y = state.pos.y * MM_SCALE;
+    v2 a = rotate_vec((v2) { 0, 5}, angle);
+    v2 b = rotate_vec((v2) { -5, -5}, angle);
+    v2 c = rotate_vec((v2) { 5, -5}, angle);
+
+    SDL_Vertex triangleVertex[3] =
+    {
+        {
+            { a.x + x, a.y + y }, /* first point location */
+            { 255, 0, 0, 0xFF }, /* first color */
+            { 0.f, 0.f }
+        },
+        {
+            { b.x + x, b.y + y }, /* second point location */
+            { 0,255,0, 0xFF }, /* second color */
+            { 0.f, 0.f }
+        },
+        {
+            { c.x + x, c.y + y }, /* third point location */
+            { 0,0,255, 0xFF }, /* third color */
+            { 0.f, 0.f }
+        }
+    };
+
+    SDL_SetRenderDrawColor(state.minimap.renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
+    SDL_RenderClear(state.minimap.renderer);
+
+    SDL_SetRenderDrawColor(state.minimap.renderer, 255, 255, 255, SDL_ALPHA_OPAQUE);
+    for(int i = 0; i < state.walls.n; i++) {
+        Wall wall = state.walls.arr[i];
+        ASSERT(SDL_RenderDrawLine(state.minimap.renderer, wall.a.x * MM_SCALE, wall.a.y * MM_SCALE, wall.b.x*MM_SCALE, wall.b.y * MM_SCALE) == 0, "Cant Draw Wall!");
+    }
+
+    for (int i = 0; i < SCREEN_WIDTH; i++) {
+        v2 ray = state.minimap.arr[i];
+        ASSERT(SDL_RenderDrawLine(state.minimap.renderer, state.pos.x * MM_SCALE, state.pos.y* MM_SCALE, ray.x * MM_SCALE, ray.y * MM_SCALE) == 0, "Cant Draw Ray!");
+    }
+
+    SDL_RenderGeometry(state.minimap.renderer, NULL, triangleVertex, 3, NULL, 0);
+    SDL_RenderPresent(state.minimap.renderer);
 }
 
 int main(int argc, char *argv[]) {
@@ -192,13 +294,32 @@ int main(int argc, char *argv[]) {
             SDL_WINDOW_ALLOW_HIGHDPI);
     ASSERT(
         state.window,
-        "failed to create SDL window: %s\n", SDL_GetError());
+        "failed to create main window: %s\n", SDL_GetError());
 
+    state.minimap.window =
+        SDL_CreateWindow(
+            "MINIMAP",
+            SDL_WINDOWPOS_CENTERED_DISPLAY(0),
+            SDL_WINDOWPOS_CENTERED_DISPLAY(0),
+            1280/4,
+            720/4,
+            SDL_WINDOW_SHOWN);
+    ASSERT(
+        state.minimap.window,
+        "failed to create minimap window: %s\n", SDL_GetError());
+
+    state.minimap.renderer =
+        SDL_CreateRenderer(state.minimap.window, -1, SDL_RENDERER_PRESENTVSYNC);
+    ASSERT(
+        state.minimap.renderer,
+        "failed to create SDL renderer: %s\n", SDL_GetError());
+    exit(0);
     state.renderer =
         SDL_CreateRenderer(state.window, -1, SDL_RENDERER_PRESENTVSYNC);
     ASSERT(
         state.renderer,
         "failed to create SDL renderer: %s\n", SDL_GetError());
+
 
     state.texture =
         SDL_CreateTexture(
@@ -212,12 +333,16 @@ int main(int argc, char *argv[]) {
         "failed to create SDL texture: %s\n", SDL_GetError());
 
 
+    load_map("sector.txt");
+
     state.pos = (v2) { 2, 2 };
     state.dir = normalize(((v2) { -1.0f, 0.1f }));
     state.plane = (v2) { 0.0f, 0.66f };
+    state.current_sector = 0;
 
-    bool input[4] = { false, false, false, false };
+
     SDL_Surface* image = SDL_LoadBMP("gun.bmp");
+
 
     while (!state.quit) {
         bool left, right, up, down = false;
@@ -259,8 +384,13 @@ int main(int argc, char *argv[]) {
             state.pos.y -= state.dir.y * movespeed;
         }
 
+        if (keystate[SDL_SCANCODE_ESCAPE]) {
+            exit(0);
+        }
+
         memset(state.pixels, 0, sizeof(state.pixels));
         render();
+        minimap();
 
         SDL_UpdateTexture(state.texture, NULL, state.pixels, SCREEN_WIDTH * 4);
         SDL_RenderCopyEx(
@@ -273,7 +403,6 @@ int main(int argc, char *argv[]) {
             SDL_FLIP_VERTICAL);
         SDL_RenderPresent(state.renderer);
     }
-
     SDL_DestroyTexture(state.texture);
     SDL_DestroyRenderer(state.renderer);
     SDL_DestroyWindow(state.window);
@@ -281,7 +410,3 @@ int main(int argc, char *argv[]) {
 }
 
 
-v2* get_walls() {
-    for(int i = 0; i < MAP_SIZE*MAP_SIZE; i++) {
-    }
-}
