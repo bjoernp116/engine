@@ -10,6 +10,8 @@
 #include <stdbool.h>
 #include <SDL2/SDL.h>
 #include <stdlib.h>
+#include <string.h>
+#include <strings.h>
 #include "types.h"
 
 
@@ -51,27 +53,11 @@ static void render() {
         //printf("DIR: (%.f, %.f)", state.dir.x, state.dir.y);
 
         v2 pos = state.pos;
-        v2 ipos = { pos.x, pos.y };
-
-        // distance ray must travel from one x/y side to the next
-        const v2 deltadist = {
-            fabsf(dir.x) < 1e-20 ? 1e30 : fabsf(1.0f / dir.x),
-            fabsf(dir.y) < 1e-20 ? 1e30 : fabsf(1.0f / dir.y),
-        };
-
-        // distance from start position to first x/y side
-        v2 sidedist = {
-            deltadist.x * (dir.x < 0 ? (pos.x - ipos.x) : (ipos.x + 1 - pos.x)),
-            deltadist.y * (dir.y < 0 ? (pos.y - ipos.y) : (ipos.y + 1 - pos.y)),
-        };
-
-        // integer step direction for x/y, calculated from overall diff
-        const v2 step = { (float) sign(dir.x), (float) sign(dir.y) };
 
         // DDA hit
         struct { int val, side; v2 pos; } hit = { 0, 0, { 0.0f, 0.0f } };
         //printf("RAY_LENGTH: %f\n", length(ipos));
-        while (!hit.val) {
+        /*while (!hit.val) {
             if (length(ipos) > 100) { break; }
             if (sidedist.x < sidedist.y) {
                 sidedist.x += deltadist.x;
@@ -97,27 +83,46 @@ static void render() {
 
             }
             //hit.val = MAPDATA[ipos.y * MAP_SIZE + ipos.x];
-        }
-
-        /*v2 ray_target = (v2) { state.pos.x + state.dir.x * 10, state.pos.y + state.dir.y * 10 };
-        f32 min_distance = 10000000;
-        Wall min_wall = state.walls.arr[0];
-        for (usize i = 0; i < state.walls.n; i++) {
-            Wall wall = state.walls.arr[i];
-            v2 intersection = intersect(state.pos, ray_target, wall.a, wall.b);
-            if(isnan(intersection.x) || isnan(intersection.y)) {
-                continue;
-            }
-            v2 dist_vec = (v2) { pos.x - intersection.x, pos.y - intersection.y };
-            f32 dist = length(dist_vec);
-            if(dist < min_distance) {
-                min_distance = dist;
-                min_wall = wall;
-            }
         }*/
 
+        f32 min_distance = INFINITY;
+        Wall* min_wall = NULL;
+        v2* min_intersection = NULL;
+        for (usize i = 0; i < state.walls.n; i++) {
+            Wall wall = state.walls.arr[i];
+
+            v2 p = { wall.b.x - wall.a.x, wall.b.y - wall.a.y };
+            v2 q = { state.pos.x - wall.a.x, state.pos.y - wall.a.y };
+
+            f32 denominator = dir.x * p.x - dir.y * p.y;
+
+            if (fabsf(denominator) < 0.000000001f) continue;
+
+            f32 t = (p.x * q.y - p.y * q.x) / denominator;
+            f32 u = (dir.x * q.y - dir.y * q.x) / denominator;
+            if (t >= 0 && u >= 0 && u <= 1) {
+                v2 intersection = { state.pos.x + t * dir.x, state.pos.y + t * dir.y };
+                v2 dist_vec = (v2) { intersection.x - state.pos.x, intersection.y - state.pos.y };
+                f32 dist = length(dist_vec);
+                if(dist < min_distance) {
+                    min_distance = dist;
+                    min_wall = &wall;
+                    min_intersection = &intersection;
+                }
+
+            }
+        }
+        if (min_wall != NULL) {
+            hit.val = 1;
+            hit.pos = *min_intersection;
+        }
+
+
+
         //hit.pos = (v2) { pos.x + sidedist.x, pos.y + sidedist.y };
-        state.minimap.arr[x] = hit.pos;
+        if (hit.pos.x != 0 && hit.pos.y != 0) {
+                state.minimap.arr[x] = hit.pos;
+        }
 
         u32 color;
         switch (hit.val) {
@@ -139,10 +144,7 @@ static void render() {
 
 
         // distance to hit
-        const f32 dperp =
-            hit.side == 0 ?
-                (sidedist.x - deltadist.x)
-                : (sidedist.y - deltadist.y);
+        const f32 dperp = min_distance;
 
         // perform perspective division, calculate line height relative to
         // screen center
@@ -232,7 +234,7 @@ void load_map(char* path) {
     return;
 }
 
-const int MM_SCALE = 10;
+const int MM_SCALE = 20;
 void minimap(){
     f32 angle = atan(state.dir.y/state.dir.x);
     int x = state.pos.x * MM_SCALE;
@@ -273,6 +275,7 @@ void minimap(){
         v2 ray = state.minimap.arr[i];
         ASSERT(SDL_RenderDrawLine(state.minimap.renderer, state.pos.x * MM_SCALE, state.pos.y* MM_SCALE, ray.x * MM_SCALE, ray.y * MM_SCALE) == 0, "Cant Draw Ray!");
     }
+    bzero(state.minimap.arr, SCREEN_WIDTH);
 
     SDL_RenderGeometry(state.minimap.renderer, NULL, triangleVertex, 3, NULL, 0);
     SDL_RenderPresent(state.minimap.renderer);
@@ -296,13 +299,19 @@ int main(int argc, char *argv[]) {
         state.window,
         "failed to create main window: %s\n", SDL_GetError());
 
+    state.renderer =
+        SDL_CreateRenderer(state.window, -1, SDL_RENDERER_PRESENTVSYNC);
+    ASSERT(
+        state.renderer,
+        "failed to create SDL renderer: %s\n", SDL_GetError());
+
     state.minimap.window =
         SDL_CreateWindow(
             "MINIMAP",
             SDL_WINDOWPOS_CENTERED_DISPLAY(0),
             SDL_WINDOWPOS_CENTERED_DISPLAY(0),
-            1280/4,
-            720/4,
+            1280/2,
+            720/2,
             SDL_WINDOW_SHOWN);
     ASSERT(
         state.minimap.window,
@@ -313,12 +322,7 @@ int main(int argc, char *argv[]) {
     ASSERT(
         state.minimap.renderer,
         "failed to create SDL renderer: %s\n", SDL_GetError());
-    exit(0);
-    state.renderer =
-        SDL_CreateRenderer(state.window, -1, SDL_RENDERER_PRESENTVSYNC);
-    ASSERT(
-        state.renderer,
-        "failed to create SDL renderer: %s\n", SDL_GetError());
+    //exit(0);
 
 
     state.texture =
@@ -353,11 +357,6 @@ int main(int argc, char *argv[]) {
                 case SDL_QUIT:
                     state.quit = true;
                     break;
-                case SDL_KEYDOWN:
-                    switch (event.key.keysym.sym) {
-
-                    };
-                    break;
             }
         }
 
@@ -385,7 +384,7 @@ int main(int argc, char *argv[]) {
         }
 
         if (keystate[SDL_SCANCODE_ESCAPE]) {
-            exit(0);
+            state.quit = true;
         }
 
         memset(state.pixels, 0, sizeof(state.pixels));
